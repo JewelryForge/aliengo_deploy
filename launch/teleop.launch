@@ -1,0 +1,10 @@
+<launch>
+    <arg name="gamepad_type" default="xbox"/>
+    <arg name="model_path" default="$(find alienGo_deploy)/script_model.pt"/>
+    <param name="gamepad_type" value="$(arg gamepad_type)"/>
+    <param name="model_path" value="$(arg model_path)"/>
+
+    <node name="gamepad_cmd" pkg="alienGo_deploy" type="gamepad_cmd.py" output="screen"
+          args="$(arg gamepad_type)"/>
+    <node name="alienGo_policy" pkg="alienGo_deploy" type="alienGo_policy" output="screen"/>
+</launch>

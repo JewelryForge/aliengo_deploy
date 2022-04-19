@@ -20,6 +20,7 @@
 
 #include <ros/ros.h>
 #include <nav_msgs/Odometry.h>
+#include "alienGo_deploy/GamepadCommand.h"
 #include "alienGo_deploy/FloatArray.h"
 #include "alienGo_deploy/MultiFloatArray.h"
 
@@ -38,6 +39,11 @@ inline std::size_t time_stamp() {
   return chrono::duration_cast<chrono::microseconds>(chrono::system_clock::now().time_since_epoch()).count();
 }
 
+template<std::size_t N, typename ARRAY1, typename ARRAY2>
+static void copy(const ARRAY1 &in, ARRAY2 &out) {
+  for (int i = 0; i < N; ++i) out[i] = in[i];
+}
+
 class AlienGoComm {
  public:
   explicit AlienGoComm(int inner_freq = 500, int outer_freq = 50)
@@ -46,27 +52,44 @@ class AlienGoComm {
         safe_(UNITREE_LEGGED_SDK::LeggedType::Aliengo) {
     udp_pub_.InitCmdData(low_cmd_msg_);
     low_cmd_msg_.levelFlag = UNITREE_LEGGED_SDK::LOWLEVEL;
-    clearCommandMsgNoLock();
+    clearCommandMessage();
     udp_pub_.SetSend(low_cmd_msg_);
     udp_pub_.Send();
   }
 
-  ~AlienGoComm() {
-    status_ = false;
-    control_loop_thread_.join();
+  ~AlienGoComm() { stopControlThread(); }
+
+  void initComm() {
+    active_ = false;
+    startControlThread();
+    std::this_thread::sleep_for(chrono::milliseconds(100));
+    while (true) {
+      low_msg_mutex_.lock();
+      bool connected = low_state_msg_.tick != 0;
+      low_msg_mutex_.unlock();
+      if (connected) break;
+      std::cout << "NOT CONNECTED" << std::endl;
+      std::this_thread::sleep_for(chrono::milliseconds(500));
+    }
   }
 
   void startControlThread() {
     if (not control_loop_thread_.joinable()) {
-      status_ = true;
+      low_status_ = true;
       // For thread safety, not to read inner_freq_ directly
       control_loop_thread_ = std::thread(&AlienGoComm::controlLoop, this, inner_freq_);
     }
   }
 
+  void stopControlThread() {
+    low_status_ = false;
+//    if (control_loop_thread_.joinable()) control_loop_thread_.join();
+  }
+
+ private:
   void controlLoop(int freq) {
     auto rate = ros::Rate(freq);
-    while (status_) {
+    while (low_status_) {
       controlLoopEvent();
       rate.sleep();
     }
@@ -88,10 +111,27 @@ class AlienGoComm {
     }
   }
 
+ protected:
+  void check_safety() {
+    float r = low_state_msg_.imu.rpy[0], p = low_state_msg_.imu.rpy[1];
+    if (r < -PI / 3 or r > PI / 3) {
+      active_ = false;
+    }
+  }
+
+  void getMotorAnglesWithLock(fArrayRef<12> out) {
+    low_state_mutex_.lock();
+    for (int i = 0; i < 12; ++i) {
+      out[i] = low_state_msg_.motorState[i].q;
+    }
+    low_state_mutex_.unlock();
+  }
+
   virtual void controlLoopEvent() {
     udp_pub_.Recv();
     low_msg_mutex_.lock();
     udp_pub_.GetRecv(low_state_msg_);
+    check_safety();
 
     if (active_) {
       low_state_mutex_.lock();
@@ -107,33 +147,25 @@ class AlienGoComm {
 //      auto current_time_stamp = time_stamp();
 //      print(current_time_stamp - last_time_stamp_, inner_loop_cnt_);
 //      last_time_stamp_ = current_time_stamp;
-//      for (int i = 0; i < 12; ++i) {
-//        low_cmd_msg_.motorCmd[i].Kp = 150;
-//        low_cmd_msg_.motorCmd[i].Kd = 4;
-//        low_cmd_msg_.motorCmd[i].dq = 0;
-//        low_cmd_msg_.motorCmd[i].q = proc_action_[i];
-//      }
+
       setCommandMsg();
       low_history_mutex_.lock();
       low_cmd_history_.push_back(proc_action_);
       low_history_mutex_.unlock();
       low_state_mutex_.unlock();
     } else {
-      clearCommandMsgNoLock();
-      low_state_mutex_.lock();
-      for (int i = 0; i < 12; ++i) {
-        proc_action_[i] = low_state_msg_.motorState[i].q;
-      }
-      low_state_mutex_.unlock();
+      clearCommandMessage();
+      getMotorAnglesWithLock(proc_action_);
     }
+
     safe_.PositionLimit(low_cmd_msg_);
     safe_.PowerProtect(low_cmd_msg_, low_state_msg_, 7);
     udp_pub_.SetSend(low_cmd_msg_);
     low_msg_mutex_.unlock();
-    udp_pub_.Send();
+    if (active_) udp_pub_.Send();
   }
 
-  void applyCommand(const Array12 &cmd) {
+  void applyCommand(fArrayConstRef<12> &cmd) {
     low_state_mutex_.lock();
     step_action_ = cmd;
     inner_loop_cnt_ = 0;
@@ -142,14 +174,7 @@ class AlienGoComm {
     step_cmd_history_.push_back(cmd);
   }
 
-  void emergentStop() {
-    status_ = false;
-    clearCommandMsgNoLock();
-    udp_pub_.Send();
-    control_loop_thread_.join();
-  }
- protected:
-  void clearCommandMsgNoLock() {
+  void clearCommandMessage() {
     // lock outside the function if needed
     for (int i = 0; i < 12; i++) {
       auto &cmd = low_cmd_msg_.motorCmd[i];
@@ -160,14 +185,9 @@ class AlienGoComm {
     }
   }
 
-  template<std::size_t N, typename ARRAY1, typename ARRAY2>
-  static void copy(const ARRAY1 &in, ARRAY2 &out) {
-    for (int i = 0; i < N; ++i) out[i] = in[i];
-  }
-
-  int num_inner_loops_, inner_freq_, outer_freq_;
+  const int num_inner_loops_, inner_freq_, outer_freq_;
   std::thread control_loop_thread_;
-  // AlienGo communication relevant
+  // AlienGoBase communication relevant
   UNITREE_LEGGED_SDK::Safety safe_;
   UNITREE_LEGGED_SDK::UDP udp_pub_;
   UNITREE_LEGGED_SDK::LowCmd low_cmd_msg_{};
@@ -179,7 +199,7 @@ class AlienGoComm {
   int inner_loop_cnt_ = 0;
   std::mutex low_state_mutex_; // for proc_action & step_action & inner_loop_cnt_
 
-  std::atomic<bool> status_{false}, active_{false};
+  std::atomic<bool> low_status_{false}, active_{false};
 
   StaticQueue<Array12, 100> low_cmd_history_;
   std::mutex low_history_mutex_; // for low_cmd_history_
@@ -188,74 +208,42 @@ class AlienGoComm {
   std::size_t last_time_stamp_ = 0;
 };
 
-class AlienGo : public AlienGoComm {
+enum LocomotionState { LYING, L2S, S2L, STANDING, S2M, M2S, MOVING };
+
+class AlienGoBase : public AlienGoComm {
  public:
-  explicit AlienGo(const std::string &model_path, int inner_freq = 500, int outer_freq = 50)
-      : AlienGoComm(inner_freq, outer_freq),
-        policy_(model_path, torch::cuda::is_available() ? torch::kCUDA : torch::kCPU),
-        tg_(std::make_shared<VerticalTG>(0.12), 2.0, {0, -PI, -PI, 0}) {
-    robot_vel_sub_ = nh_.subscribe<nav_msgs::Odometry>("/camera/odom/sample", 5, &AlienGo::velocityUpdate, this);
-    cmd_vel_sub = nh_.subscribe<alienGo_deploy::FloatArray>("/cmd_vel", 1, &AlienGo::cmdVelUpdate, this);
+  explicit AlienGoBase(int inner_freq = 500, int outer_freq = 50)
+      : AlienGoComm(inner_freq, outer_freq) {
+    robot_vel_sub_ = nh_.subscribe<nav_msgs::Odometry>("/camera/odom/sample", 5, &AlienGoBase::velocityUpdate, this);
+    cmd_vel_sub = nh_.subscribe<alienGo_deploy::GamepadCommand>("/gamepad", 1, &AlienGoBase::commandUpdate, this);
     data_tester_ = nh_.advertise<alienGo_deploy::MultiFloatArray>("/test_data", 1);
     applyCommand(STANCE_POSTURE);
+    startPolicyThread();
   }
 
-  ~AlienGo() {
-    status_ = false;
-    action_loop_thread_.join();
-  }
-
-  void standup() {
-    // start inner loop and control robot to stand up
-    active_ = false;
-    startControlThread();
-    std::this_thread::sleep_for(chrono::milliseconds(100));
-    while (true) {
-      low_msg_mutex_.lock();
-      bool is_empty = low_state_msg_.tick == 0;
-      low_msg_mutex_.unlock();
-      if (not is_empty) break;
-      std::cout << "NOT CONNECTED" << std::endl;
-      std::this_thread::sleep_for(chrono::milliseconds(500));
-    }
-
-    Array12 init_cfg;
-    low_msg_mutex_.lock();
-    for (int i = 0; i < 12; ++i) {
-      init_cfg[i] = low_state_msg_.motorState[i].q;
-    }
-    low_msg_mutex_.unlock();
-
-    int num_steps = int(1 * outer_freq_);
-    auto rate = ros::Rate(outer_freq_);
-    active_ = true;
-    for (int i = 1; i <= num_steps; ++i) {
-      applyCommand(float(num_steps - i) / num_steps * init_cfg
-                       + float(i) / num_steps * LYING_POSTURE);
-      rate.sleep();
-    }
-    num_steps = int(1.5 * outer_freq_);
-    for (int i = 1; i <= num_steps; ++i) {
-      applyCommand(float(num_steps - i) / num_steps * LYING_POSTURE
-                       + float(i) / num_steps * STANCE_POSTURE);
-      rate.sleep();
-    }
-  }
+  ~AlienGoBase() { stopPolicyThread(); }
 
   void startPolicyThread() {
-    if (not action_loop_thread_.joinable() and status_) {
-      action_loop_thread_ = std::thread(&AlienGo::actionLoop, this, outer_freq_);
+    if (not action_loop_thread_.joinable()) {
+      high_status_ = true;
+      action_loop_thread_ = std::thread(&AlienGoBase::actionLoop, this, outer_freq_);
     }
   }
 
-  void setCommand(const Array3 &cmd_vel) {
+  void stopPolicyThread() {
+    if (action_loop_thread_.joinable()) {
+      high_status_ = false;
+      action_loop_thread_.join();
+    }
+  }
+
+  void setCommand(fArrayConstRef<3> &cmd_vel) {
     high_state_mutex_.lock();
     cmd_vel_ = cmd_vel;
     high_state_mutex_.unlock();
   }
 
-//  template <typename Derived>
-  void inverseKinematics(uint leg, Array3 pos, Eigen::Ref<Array3> out) {
+  void inverseKinematics(uint leg, Array3 pos, fArrayRef<3> out) {
     // leg: 0 = forward right; 1 = forward left;
     //      2 = rear right;    3 = rear left.
     // pos: relative to correspondent foot on standing
@@ -287,71 +275,13 @@ class AlienGo : public AlienGoComm {
     }
   }
 
-  void inverseKinematicsPatch(const Array12 &pos, Eigen::Ref<Array12> out) {
+  void inverseKinematicsPatch(fArrayConstRef<12> &pos, fArrayRef<12> out) {
     for (int i = 0; i < 4; ++i) {
       inverseKinematics(i, pos.segment<3>(i * 3), out.segment<3>(i * 3));
     }
   }
 
  private:
-  void actionLoop(int freq) {
-    auto rate = ros::Rate(freq);
-    while (status_) {
-      actionLoopEvent();
-      rate.sleep();
-    }
-  }
-
-  void controlLoopEvent() override {
-    AlienGoComm::controlLoopEvent();
-    auto data = collectProprioInfo();
-    alienGo_deploy::MultiFloatArray multi_array;
-
-//    alienGo_deploy::FloatArray array;
-//    for (int i = 0; i < 12; ++i) {
-//      array.data.push_back(low_state_msg_.motorState[i].q);
-//    }
-//    multi_array.data.push_back(array);
-
-    multi_array.data.push_back(*makeFloatArray(data->command));
-    multi_array.data.push_back(*makeFloatArray(data->gravity_vector));
-    multi_array.data.push_back(*makeFloatArray(data->base_linear));
-    multi_array.data.push_back(*makeFloatArray(data->base_angular));
-    multi_array.data.push_back(*makeFloatArray(data->joint_pos));
-    multi_array.data.push_back(*makeFloatArray(data->joint_vel));
-    multi_array.data.push_back(*makeFloatArray(data->joint_pos_target));
-    data_tester_.publish(multi_array);
-  }
-
-  template<int N>
-  static alienGo_deploy::FloatArray::Ptr makeFloatArray(const fArray<N> &data) {
-    alienGo_deploy::FloatArray::Ptr array(new alienGo_deploy::FloatArray);
-    for (int i = 0; i < N; ++i) array->data.push_back(data[i]);
-    return array;
-  }
-
-  void actionLoopEvent() {
-    low_state_mutex_.lock();
-    // copy to make sure obs_history_ is not locked when calculating action
-    auto proprio_info = *obs_history_.back();
-    low_state_mutex_.unlock();
-    auto realworld_obs = makeRealWorldObs();
-    auto start = chrono::system_clock::now();
-    auto action = policy_.get_action(proprio_info, *realworld_obs);
-    auto end = chrono::system_clock::now();
-    print(chrono::duration_cast<chrono::microseconds>(end - start).count());
-    Array12 action_array = Eigen::Map<Array12>(action.data_ptr<float>());
-
-    auto current_time_stamp = time_stamp();
-    print(current_time_stamp - last_time_stamp_, inner_loop_cnt_);
-    last_time_stamp_ = current_time_stamp;
-
-    tg_.update(1. / outer_freq_);
-    Array12 joint_cmd;
-    inverseKinematicsPatch(action_array + tg_.getPrioriTrajectory(), joint_cmd);
-    applyCommand(joint_cmd);
-  }
-
   void velocityUpdate(const nav_msgs::Odometry::ConstPtr &odom) {
     // in main thread
     cam_state_mutex_.lock();
@@ -364,10 +294,224 @@ class AlienGo : public AlienGoComm {
     cam_state_mutex_.unlock();
   }
 
-  void cmdVelUpdate(const alienGo_deploy::FloatArray::ConstPtr &cmd_vel) {
+  void commandUpdate(const alienGo_deploy::GamepadCommand::ConstPtr &cmd) {
+    if (cmd->LAS and cmd->RAS) {
+      active_ = false;
+      locomotion_state_ = LYING;
+      return;
+    }
+    if (cmd->LT > 0.99) {
+      if (cmd->A) {
+        if (locomotion_state_ == LYING) {
+          locomotion_state_ = L2S;
+        } else if (locomotion_state_ == STANDING) {
+          locomotion_state_ = S2L;
+        }
+      } else if (cmd->B) {
+        if (locomotion_state_ == STANDING) {
+          locomotion_state_ = S2M;
+        } else if (locomotion_state_ == MOVING) {
+          locomotion_state_ = M2S;
+        }
+      } else if (cmd->X) {
+        startControlThread();
+      }
+    }
+
+    float lin_x = -cmd->left_y, lin_y = -cmd->left_x, rot_z = -cmd->right_x;
     high_state_mutex_.lock();
-    copy<3>(cmd_vel->data, cmd_vel_);
+    if (lin_x or lin_y) {
+      float norm = std::hypot(lin_x, lin_y);
+      cmd_vel_[0] = lin_x / norm;
+      cmd_vel_[1] = lin_y / norm;
+    } else {
+      cmd_vel_[0] = cmd_vel_[1] = 0.;
+    }
+    if (rot_z > 0.2) cmd_vel_[2] = 1.;
+    else if (rot_z < -0.2) cmd_vel_[2] = -1.;
+    else cmd_vel_[2] = 0.;
     high_state_mutex_.unlock();
+  }
+
+ protected:
+  virtual void actionLoop(int freq) {
+    auto rate = ros::Rate(freq);
+    while (high_status_) {
+      actionLoopEvent(freq);
+      rate.sleep();
+    }
+  }
+
+  void actionLoopEvent(int freq) {
+    switch (locomotion_state_) {
+      case LYING: { break; }
+      case STANDING: {
+        last_action_ = STANCE_POSTURE;
+        break;
+      }
+      case MOVING: {
+        policyEvent(last_action_);
+        break;
+      }
+      case L2S: { // from lying to standing
+        if (progress_time_steps_ == 0) {
+          getMotorAnglesWithLock(last_action_);
+          active_ = true;
+        }
+        int num_steps_s1 = 0.8 * freq, num_steps_s2 = 1.2 * freq;
+        if (progress_time_steps_ < num_steps_s1) {
+          auto error = LYING_POSTURE - last_action_;
+          last_action_ += error / (num_steps_s1 - progress_time_steps_);
+          ++progress_time_steps_;
+        } else if (progress_time_steps_ < num_steps_s1 + num_steps_s2) {
+          int time_step = progress_time_steps_ - num_steps_s1;
+          auto error = STANCE_POSTURE - last_action_;
+          last_action_ += error / (num_steps_s2 - time_step);
+          ++progress_time_steps_;
+        } else {
+          progress_time_steps_ = 0;
+          locomotion_state_ = STANDING;
+        }
+        break;
+      }
+      case S2L: { // from standing to lying
+        int num_steps = 1. * freq;
+        if (progress_time_steps_ < num_steps) {
+          auto error = LYING_POSTURE - last_action_;
+          last_action_ += error / (num_steps - progress_time_steps_);
+          ++progress_time_steps_;
+        } else {
+          progress_time_steps_ = 0;
+          locomotion_state_ = LYING;
+          active_ = false;
+        }
+        break;
+      }
+      case S2M: { // from standing to moving
+        locomotion_state_ = MOVING;
+        policyReset();
+        break;
+      }
+      case M2S: { // from moving to standing
+        if (progress_time_steps_ == 0) {
+          getMotorAnglesWithLock(last_action_);
+        }
+        int num_steps = 0.3 * freq;
+        if (progress_time_steps_ < num_steps) {
+          auto error = STANCE_POSTURE - last_action_;
+          last_action_ += error / (num_steps - progress_time_steps_);
+          ++progress_time_steps_;
+        } else {
+          progress_time_steps_ = 0;
+          locomotion_state_ = STANDING;
+        }
+        break;
+      }
+      default: break;
+    }
+    applyCommand(last_action_);
+  }
+  virtual void policyReset() {}
+  virtual void policyEvent(fArrayRef<12>) {}
+
+  Array12 STANCE_POSTURE{ALIENGO_STANCE_POSTURE_ARRAY.data()};
+  Array12 LYING_POSTURE{ALIENGO_LYING_POSTURE_ARRAY.data()};
+  Array12 STANCE_FOOT_POSITIONS{ALIENGO_STANCE_FOOT_POSITIONS_ARRAY.data()};
+  Array3 LINK_LENGTHS{ALIENGO_LINK_LENGTHS_ARRAY.data()};
+
+  std::atomic<LocomotionState> locomotion_state_{LYING};
+  int progress_time_steps_ = 0;
+  Array12 last_action_;
+
+  std::thread action_loop_thread_;
+  std::atomic<bool> high_status_{false};
+
+  // velocity calculation relevant
+  Array3 cam_lin_vel_ = Array3::Zero(), cam_ang_vel_ = Array3::Zero();
+  std::mutex cam_state_mutex_; // for cam_lin_vel_ & cam_ang_vel_
+  // high velocity command relevant
+  Array3 cmd_vel_ = Array3::Zero();
+  std::mutex high_state_mutex_; // for cmd_vel_
+  // previous observations relevant
+  StaticQueue<std::shared_ptr<ProprioInfo>, 100> obs_history_;
+  std::mutex obs_history_mutex_; // for obs_history_
+  // ros relevant
+  ros::NodeHandle nh_;
+  ros::Subscriber robot_vel_sub_, cmd_vel_sub;
+  ros::Publisher data_tester_;
+};
+
+template<int N>
+static alienGo_deploy::FloatArray::Ptr makeFloatArray(const fArray<N> &data) {
+  alienGo_deploy::FloatArray::Ptr array(new alienGo_deploy::FloatArray);
+  for (int i = 0; i < N; ++i) array->data.push_back(data[i]);
+  return array;
+}
+
+template<std::size_t N>
+static alienGo_deploy::FloatArray::Ptr makeFloatArray(const std::array<float, N> &data) {
+  alienGo_deploy::FloatArray::Ptr array(new alienGo_deploy::FloatArray);
+  for (int i = 0; i < N; ++i) array->data.push_back(data[i]);
+  return array;
+}
+
+class AlienGo : public AlienGoBase {
+ public:
+  explicit AlienGo(const std::string &model_path, int inner_freq = 500, int outer_freq = 50)
+      : AlienGoBase(inner_freq, outer_freq),
+        policy_(model_path, torch::cuda::is_available() ? torch::kCUDA : torch::kCPU),
+        tg_(std::make_shared<VerticalTG>(0.12), 2.0, {0, -PI, -PI, 0}) {}
+
+ private:
+  void controlLoopEvent() override {
+    AlienGoComm::controlLoopEvent();
+    auto data = collectProprioInfo();
+    alienGo_deploy::MultiFloatArray multi_array;
+
+//    alienGo_deploy::FloatArray array;
+//    for (int i = 0; i < 12; ++i) {
+//      array.data.push_back(low_state_msg_.motorState[i].q);
+//    }
+//    multi_array.data.push_back(array);
+
+//    low_msg_mutex_.lock();
+//    multi_array.data.push_back(*makeFloatArray(low_state_msg_.imu.rpy));
+//    low_msg_mutex_.unlock();
+    multi_array.data.push_back(*makeFloatArray(data->command));
+    multi_array.data.push_back(*makeFloatArray(data->gravity_vector));
+    multi_array.data.push_back(*makeFloatArray(data->base_linear));
+    multi_array.data.push_back(*makeFloatArray(data->base_angular));
+    multi_array.data.push_back(*makeFloatArray(data->joint_pos));
+    multi_array.data.push_back(*makeFloatArray(data->joint_vel));
+    multi_array.data.push_back(*makeFloatArray(data->joint_pos_target));
+    data_tester_.publish(multi_array);
+  }
+
+  void policyReset() override {
+    policy_.clearHistory();
+  }
+
+  void policyEvent(fArrayRef<12> out) override {
+    low_state_mutex_.lock();
+    // copy to make sure obs_history_ is not locked during network inference
+    while (obs_history_.is_empty());
+    auto proprio_info = *obs_history_.back();
+    low_state_mutex_.unlock();
+    auto realworld_obs = makeRealWorldObs();
+    auto start = chrono::system_clock::now();
+    auto action = policy_.get_action(proprio_info, *realworld_obs);
+    auto end = chrono::system_clock::now();
+//    print(chrono::duration_cast<chrono::microseconds>(end - start).count());
+    Array12 action_array = Eigen::Map<Array12>(action.data_ptr<float>());
+
+//    auto current_time_stamp = time_stamp();
+//    print(current_time_stamp - last_time_stamp_, inner_loop_cnt_);
+//    last_time_stamp_ = current_time_stamp;
+
+    tg_.update(1. / outer_freq_);
+    Array12 priori;
+    tg_.getPrioriTrajectory(priori);
+    inverseKinematicsPatch(action_array + priori, out);
   }
 
   std::shared_ptr<ProprioInfo> collectProprioInfo() {
@@ -397,11 +541,7 @@ class AlienGo : public AlienGoComm {
     }
     low_msg_mutex_.unlock();
 
-//    obs->joint_pos_target = step_cmd_history_.back();
-    low_state_mutex_.lock();
-    obs->joint_pos_target = proc_action_;
-    low_state_mutex_.unlock();
-
+    obs->joint_pos_target = step_cmd_history_.back();
     obs->ftg_frequencies = tg_.freq;
     tg_.getSoftPhases(obs->ftg_phases);
 
@@ -444,7 +584,7 @@ class AlienGo : public AlienGoComm {
     return obs;
   }
 
-  void getLinearVelocity(const Eigen::Matrix3f &w_R_b, Eigen::Ref<Array3> out) {
+  void getLinearVelocity(const Eigen::Matrix3f &w_R_b, fArrayRef<3> out) {
     // get base linear velocity in BASE frame
     // w for world, b for base and c for camera
     // w_V_b = w_V_c + w_Ω_c x w_R_c · c_Q_b, so
@@ -467,35 +607,13 @@ class AlienGo : public AlienGoComm {
     cam_state_mutex_.unlock();
   }
 
-  template<typename ARRAY>
-  void getGravityVector(const ARRAY &orientation, Eigen::Ref<Array3> out) {
+  void getGravityVector(const std::array<float, 4> &orientation, fArrayRef<3> out) {
     float w = orientation[0], x = orientation[1], y = orientation[2], z = orientation[3];
     out[0] = 2 * x * z + 2 * y * w;
     out[1] = 2 * y * z - 2 * x * w;
     out[2] = 1 - 2 * x * x - 2 * y * y;
   }
 
- private:
-  Array12 STANCE_POSTURE{ALIENGO_STANCE_POSTURE_ARRAY.data()};
-  Array12 LYING_POSTURE{ALIENGO_LYING_POSTURE_ARRAY.data()};
-  Array12 STANCE_FOOT_POSITIONS{ALIENGO_STANCE_FOOT_POSITIONS_ARRAY.data()};
-  Array3 LINK_LENGTHS{ALIENGO_LINK_LENGTHS_ARRAY.data()};
-
-  std::thread action_loop_thread_;
-
-  // velocity calculation relevant
-  Array3 cam_lin_vel_ = Array3::Zero(), cam_ang_vel_ = Array3::Zero();
-  std::mutex cam_state_mutex_; // for cam_lin_vel_ & cam_ang_vel_
-  // high velocity command relevant
-  Array3 cmd_vel_ = Array3::Zero();
-  std::mutex high_state_mutex_; // for cmd_vel_
-  // previous observations relavant
-  StaticQueue<std::shared_ptr<ProprioInfo>, 100> obs_history_;
-  std::mutex obs_history_mutex_; // for obs_history_
-  // ros relevant
-  ros::NodeHandle nh_;
-  ros::Subscriber robot_vel_sub_, cmd_vel_sub;
-  ros::Publisher data_tester_;
   // action relevant
   TgStateMachine tg_;
   Policy policy_;

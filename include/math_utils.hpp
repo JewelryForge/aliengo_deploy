@@ -13,6 +13,16 @@ using Array8 = fArray<8>;
 using Array12 = fArray<12>;
 using Array24 = fArray<24>;
 
+// See https://eigen.tuxfamily.org/dox/classEigen_1_1Ref.html
+template<typename T>
+using EigenConstRef = const Eigen::Ref<const T>;
+
+template<std::size_t N>
+using fArrayConstRef = EigenConstRef<fArray<N>>;
+
+template<std::size_t N>
+using fArrayRef = Eigen::Ref<fArray<N>>;
+
 constexpr float PI = M_PI;
 constexpr float TAU = M_PI * 2;
 

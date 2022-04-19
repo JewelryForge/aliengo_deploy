@@ -9,15 +9,15 @@
 
 class TG {
  public:
-  virtual Array12 getPriori(const Array4 &phases) const = 0;
+  virtual void getPriori(fArrayConstRef<4> &phases, fArrayRef<12> out) const = 0;
 };
 
 class VerticalTG : public TG {
  public:
   explicit VerticalTG(float h = 0.08) : h_(h) {}
 
-  Array12 getPriori(const Array4 &phases) const override {
-    Array12 out = Array12::Zero();
+  void getPriori(fArrayConstRef<4> &phases, fArrayRef<12> out) const override {
+    out.setZero();
     Array4 ks = phases * 2 / PI;
     for (int i = 0; i < 4; ++i) {
       float k = ks[i];
@@ -28,7 +28,6 @@ class VerticalTG : public TG {
         else out[i * 3 + 2] = k_pow.matrix().dot(coeff2.matrix()) * h_;
       }
     }
-    return out;
   }
 
  private:
@@ -59,16 +58,16 @@ class TgStateMachine {
     return phases_;
   };
 
-  const Array4 &update(float time_step, const Array4 &freq_offsets) {
+  const Array4 &update(float time_step, fArrayConstRef<4> &freq_offsets) {
     for (int i = 0; i < 4; ++i) freq_[i] = clip(base_freq_ + freq_offsets[i], lower_freq, upper_freq);
     return update(time_step);
   };
 
-  Array12 getPrioriTrajectory() const {
-    return tg_->getPriori(phases);
+  void getPrioriTrajectory(fArrayRef<12> out) const {
+    return tg_->getPriori(phases, out);
   }
 
-  void getSoftPhases(Eigen::Ref<Array8> out) {
+  void getSoftPhases(fArrayRef<8> out) {
     out.segment<4>(0) = phases_.sin();
     out.segment<4>(4) = phases_.cos();
   }

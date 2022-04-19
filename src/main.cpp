@@ -1,17 +1,13 @@
 #include "aliengo.hpp"
 #include "io.hpp"
-//using namespace std;
 
 int main(int argc, char *argv[]) {
-  if (argc < 1) {
-    print("usage: ./alienGo_policy <model_path>");
-    return 0;
-  }
   ros::init(argc, argv, "alienGo_policy");
-  std::string model_path("/home/jewel/Workspaces/teacher-student/log/student/script_model.pt");
+  std::string model_path;
+  ros::param::get("model_path", model_path);
+  print("Loading Model", model_path);
   AlienGo robot(model_path);
-  robot.standup();
-  robot.startPolicyThread();
+  print("Finished Loading");
+  robot.initComm();
   ros::spin();
-//  while (ros::ok());
 }
