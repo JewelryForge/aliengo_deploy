@@ -12,6 +12,7 @@ using Array4 = fArray<4>;
 using Array8 = fArray<8>;
 using Array12 = fArray<12>;
 using Array24 = fArray<24>;
+using Vector3 = Eigen::Vector3f;
 
 // See https://eigen.tuxfamily.org/dox/classEigen_1_1Ref.html
 template<typename T>

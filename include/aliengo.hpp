@@ -9,6 +9,8 @@
 #include <atomic>
 #include <mutex>
 #include <memory>
+#include <Eigen/Geometry>
+#include <kdl/chain.hpp>
 
 #include "tg.hpp"
 #include "io.hpp"
@@ -313,14 +315,14 @@ class AlienGoBase : public AlienGoComm {
         } else if (locomotion_state_ == MOVING) {
           locomotion_state_ = M2S;
         }
-      } else if (cmd->X) {
+      } /* else if (cmd->X) {
         startControlThread();
-      }
+      } */
     }
 
     float lin_x = -cmd->left_y, lin_y = -cmd->left_x, rot_z = -cmd->right_x;
     high_state_mutex_.lock();
-    if (lin_x or lin_y) {
+    if (lin_x != 0. or lin_y != 0.) {
       float norm = std::hypot(lin_x, lin_y);
       cmd_vel_[0] = lin_x / norm;
       cmd_vel_[1] = lin_y / norm;
@@ -427,7 +429,7 @@ class AlienGoBase : public AlienGoComm {
   std::atomic<bool> high_status_{false};
 
   // velocity calculation relevant
-  Array3 cam_lin_vel_ = Array3::Zero(), cam_ang_vel_ = Array3::Zero();
+  Vector3 cam_lin_vel_ = Vector3::Zero(), cam_ang_vel_ = Vector3::Zero();
   std::mutex cam_state_mutex_; // for cam_lin_vel_ & cam_ang_vel_
   // high velocity command relevant
   Array3 cmd_vel_ = Array3::Zero();
@@ -469,21 +471,24 @@ class AlienGo : public AlienGoBase {
     alienGo_deploy::MultiFloatArray multi_array;
 
 //    alienGo_deploy::FloatArray array;
-//    for (int i = 0; i < 12; ++i) {
-//      array.data.push_back(low_state_msg_.motorState[i].q);
-//    }
+//    multi_array.data.push_back(*makeFloatArray(low_state_msg_.imu.rpy));
+//    multi_array.data.push_back(*makeFloatArray(low_state_msg_.imu.gyroscope));
+//    multi_array.data.push_back(*makeFloatArray(low_state_msg_.imu.accelerometer));
 //    multi_array.data.push_back(array);
 
 //    low_msg_mutex_.lock();
 //    multi_array.data.push_back(*makeFloatArray(low_state_msg_.imu.rpy));
 //    low_msg_mutex_.unlock();
-    multi_array.data.push_back(*makeFloatArray(data->command));
-    multi_array.data.push_back(*makeFloatArray(data->gravity_vector));
-    multi_array.data.push_back(*makeFloatArray(data->base_linear));
-    multi_array.data.push_back(*makeFloatArray(data->base_angular));
-    multi_array.data.push_back(*makeFloatArray(data->joint_pos));
-    multi_array.data.push_back(*makeFloatArray(data->joint_vel));
-    multi_array.data.push_back(*makeFloatArray(data->joint_pos_target));
+//    multi_array.data.push_back(*makeFloatArray(data->command));
+//    multi_array.data.push_back(*makeFloatArray(data->gravity_vector));
+//    multi_array.data.push_back(*makeFloatArray(data->base_linear));
+
+//    multi_array.data.push_back(*makeFloatArray(data->base_angular));
+//    multi_array.data.push_back(*makeFloatArray(data->joint_pos));
+//    multi_array.data.push_back(*makeFloatArray(data->joint_vel));
+//    multi_array.data.push_back(*makeFloatArray(data->joint_pos_target));
+
+//    multi_array.data.push_back(*makeFloatArray());
     data_tester_.publish(multi_array);
   }
 
@@ -498,39 +503,27 @@ class AlienGo : public AlienGoBase {
     auto proprio_info = *obs_history_.back();
     low_state_mutex_.unlock();
     auto realworld_obs = makeRealWorldObs();
-    auto start = chrono::system_clock::now();
+//    auto start = chrono::system_clock::now();
     auto action = policy_.get_action(proprio_info, *realworld_obs);
-    auto end = chrono::system_clock::now();
+//    auto end = chrono::system_clock::now();
 //    print(chrono::duration_cast<chrono::microseconds>(end - start).count());
     Array12 action_array = Eigen::Map<Array12>(action.data_ptr<float>());
-
-//    auto current_time_stamp = time_stamp();
-//    print(current_time_stamp - last_time_stamp_, inner_loop_cnt_);
-//    last_time_stamp_ = current_time_stamp;
-
     tg_.update(1. / outer_freq_);
     Array12 priori;
     tg_.getPrioriTrajectory(priori);
     inverseKinematicsPatch(action_array + priori, out);
+
+//    auto current_time_stamp = time_stamp();
+//    print(current_time_stamp - last_time_stamp_, inner_loop_cnt_);
+//    last_time_stamp_ = current_time_stamp;
   }
 
   std::shared_ptr<ProprioInfo> collectProprioInfo() {
-    Eigen::Matrix3f w_R_b;
-    low_msg_mutex_.lock();
-    const auto &orn = low_state_msg_.imu.quaternion;
-    float w = orn[0], x = orn[1], y = orn[2], z = orn[3];
-    low_msg_mutex_.unlock();
-    float xx = x * x, xy = x * y, xz = x * z, xw = x * w;
-    float yy = y * y, yz = y * z, yw = y * w, zz = z * z, zw = z * w;
-    w_R_b << 1 - 2 * yy - 2 * zz, 2 * xy - 2 * zw, 2 * xz + 2 * yw,
-        2 * xy + 2 * zw, 1 - 2 * xx - 2 * zz, 2 * yz - 2 * xw,
-        2 * xz - 2 * yw, 2 * yz + 2 * xw, 1 - 2 * xx - 2 * yy;
-
     auto obs = std::make_shared<ProprioInfo>();
     high_state_mutex_.lock();
     obs->command = cmd_vel_;
     high_state_mutex_.unlock();
-    getLinearVelocity(w_R_b, obs->base_linear);
+    getLinearVelocity(obs->base_linear);
 
     low_msg_mutex_.lock();
     getGravityVector(low_state_msg_.imu.quaternion, obs->gravity_vector);
@@ -584,26 +577,33 @@ class AlienGo : public AlienGoBase {
     return obs;
   }
 
-  void getLinearVelocity(const Eigen::Matrix3f &w_R_b, fArrayRef<3> out) {
+  void getLinearVelocity(fArrayRef<3> out) {
+    cam_state_mutex_.lock();
+    KDL::Twist cam_twist({cam_lin_vel_.x(), cam_lin_vel_.y(), cam_lin_vel_.z()},
+                         {cam_ang_vel_.x(), cam_ang_vel_.y(), cam_ang_vel_.z()});
+    cam_state_mutex_.unlock();
+    KDL::Frame cam2base({0.9703, 0., 0.2419, 0., 1., 0., -0.2419, 0., 0.9703},
+                        {0.3312, 0.0173, -0.0045});
+
+    auto base_twist = cam2base * cam_twist;
+    out[0] = base_twist.vel.x();
+    out[1] = base_twist.vel.y();
+    out[2] = base_twist.vel.z();
+  }
+
+  void getLinearVelocity2(fArrayRef<3> out) {
     // get base linear velocity in BASE frame
     // w for world, b for base and c for camera
-    // w_V_b = w_V_c + w_Ω_c x w_R_c · c_Q_b, so
-    // b_V_b = b_V_c + b_Ω_c x w_R_c · c_Q_b, then
-    // b_V_b = b_R_c · c_V_c + b_R_c · c_Ω_c x w_R_c · c_Q_b, in this case
-    // b_R_c = [[1, 0, 0]
-    //          [0, 1, 0]
-    //          [0, 0, 1]], so w_R_c = w_R_b, let c_Ω_c x = c_S_c, then simplified
-    // b_V_b = c_V_c + c_S_c · w_R_b · c_Q_b
+    // b_V_b = b_V_c + b_Ω_c x b_R_c · c_P_cb, then
+    // b_V_b = b_R_c · c_V_c + (b_R_c · c_Ω_c) x (b_R_c · c_P_cb)
+    // b_V_b = b_R_c · c_V_c + (b_R_c · c_Ω_c) x b_P_cb
     // c_V_c, i.e. cam_lin_vel_; c_Ω_c, i.e. cam_ang_vel_
 
-    const Eigen::Vector3f c_Q_b(-0.332, 0, 0);
+    Eigen::Matrix3f b_R_c;
+    b_R_c << 0.9703, 0., 0.2419, 0., 1., 0., -0.2419, 0., 0.9703;
+    const Vector3 b_P_cb(-0.3312, -0.0173, 0.0045);
     cam_state_mutex_.lock();
-    float Wx = cam_ang_vel_.x(), Wy = cam_ang_vel_.y(), Wz = cam_ang_vel_.z();
-    Eigen::Matrix3f c_S_c;
-    c_S_c << 0, -Wz, Wy,
-        Wz, 0, -Wx,
-        -Wy, Wx, 0;
-    out = cam_lin_vel_ + (c_S_c * w_R_b * c_Q_b).array();
+    out = b_R_c * cam_lin_vel_ + (b_R_c * cam_ang_vel_).cross(b_P_cb);
     cam_state_mutex_.unlock();
   }
 
