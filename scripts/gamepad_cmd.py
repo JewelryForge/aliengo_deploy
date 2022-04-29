@@ -4,7 +4,7 @@ import os
 import time
 
 import rospy
-from alienGo_deploy.msg import GamepadCommand
+from aliengo_deploy.msg import GamepadCommand
 
 
 class JoystickRosInterface(object):

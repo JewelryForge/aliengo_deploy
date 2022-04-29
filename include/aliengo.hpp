@@ -22,9 +22,9 @@
 
 #include <ros/ros.h>
 #include <nav_msgs/Odometry.h>
-#include "alienGo_deploy/GamepadCommand.h"
-#include "alienGo_deploy/FloatArray.h"
-#include "alienGo_deploy/MultiFloatArray.h"
+#include "aliengo_deploy/GamepadCommand.h"
+#include "aliengo_deploy/FloatArray.h"
+#include "aliengo_deploy/MultiFloatArray.h"
 
 constexpr float ALIENGO_STANCE_HEIGHT = 0.4;
 constexpr std::array<float, 12> ALIENGO_STANCE_POSTURE_ARRAY{0., 0.6435, -1.287, 0., 0.6435, -1.287,
@@ -70,13 +70,19 @@ class AlienGoComm {
       bool connected = low_state_msg_.tick != 0;
       low_msg_mutex_.unlock();
       if (connected) break;
-      std::cout << "NOT CONNECTED" << std::endl;
+      std::cout << MAKE_YELLOW("Not connected to robot") << std::endl;
       std::this_thread::sleep_for(chrono::milliseconds(500));
     }
+    std::cout << MAKE_GREEN("Connected to robot") << std::endl;
   }
 
   void startControlThread() {
-    if (not control_loop_thread_.joinable()) {
+    bool started = control_loop_thread_.joinable();
+    if (not low_status_ and started) {
+      control_loop_thread_.join();
+      started = false;
+    }
+    if (not started) {
       low_status_ = true;
       // For thread safety, not to read inner_freq_ directly
       control_loop_thread_ = std::thread(&AlienGoComm::controlLoop, this, inner_freq_);
@@ -85,7 +91,7 @@ class AlienGoComm {
 
   void stopControlThread() {
     low_status_ = false;
-//    if (control_loop_thread_.joinable()) control_loop_thread_.join();
+    if (control_loop_thread_.joinable()) control_loop_thread_.join();
   }
 
  private:
@@ -153,6 +159,11 @@ class AlienGoComm {
       setCommandMsg();
       low_history_mutex_.lock();
       low_cmd_history_.push_back(proc_action_);
+      Array12 joint_pos;
+      for (int i = 0; i < 12; ++i) {
+        joint_pos[i] = low_state_msg_.motorState[i].q;
+      }
+      residue_history_.push_back(proc_action_ - joint_pos);
       low_history_mutex_.unlock();
       low_state_mutex_.unlock();
     } else {
@@ -189,7 +200,7 @@ class AlienGoComm {
 
   const int num_inner_loops_, inner_freq_, outer_freq_;
   std::thread control_loop_thread_;
-  // AlienGoBase communication relevant
+  // AlienGo communication relevant
   UNITREE_LEGGED_SDK::Safety safe_;
   UNITREE_LEGGED_SDK::UDP udp_pub_;
   UNITREE_LEGGED_SDK::LowCmd low_cmd_msg_{};
@@ -204,7 +215,8 @@ class AlienGoComm {
   std::atomic<bool> low_status_{false}, active_{false};
 
   StaticQueue<Array12, 100> low_cmd_history_;
-  std::mutex low_history_mutex_; // for low_cmd_history_
+  StaticQueue<Array12, 20> residue_history_;
+  std::mutex low_history_mutex_; // for low_cmd_history_ & residue_history_
   StaticQueue<Array12, 10> step_cmd_history_; // Not used inside inner loop
 
   std::size_t last_time_stamp_ = 0;
@@ -217,8 +229,8 @@ class AlienGoBase : public AlienGoComm {
   explicit AlienGoBase(int inner_freq = 500, int outer_freq = 50)
       : AlienGoComm(inner_freq, outer_freq) {
     robot_vel_sub_ = nh_.subscribe<nav_msgs::Odometry>("/camera/odom/sample", 5, &AlienGoBase::velocityUpdate, this);
-    cmd_vel_sub = nh_.subscribe<alienGo_deploy::GamepadCommand>("/gamepad", 1, &AlienGoBase::commandUpdate, this);
-    data_tester_ = nh_.advertise<alienGo_deploy::MultiFloatArray>("/test_data", 1);
+    cmd_vel_sub = nh_.subscribe<aliengo_deploy::GamepadCommand>("/gamepad", 1, &AlienGoBase::commandUpdate, this);
+    data_tester_ = nh_.advertise<aliengo_deploy::MultiFloatArray>("/test_data", 1);
     applyCommand(STANCE_POSTURE);
     startPolicyThread();
   }
@@ -296,7 +308,7 @@ class AlienGoBase : public AlienGoComm {
     cam_state_mutex_.unlock();
   }
 
-  void commandUpdate(const alienGo_deploy::GamepadCommand::ConstPtr &cmd) {
+  void commandUpdate(const aliengo_deploy::GamepadCommand::ConstPtr &cmd) {
     if (cmd->LAS and cmd->RAS) {
       active_ = false;
       locomotion_state_ = LYING;
@@ -315,23 +327,24 @@ class AlienGoBase : public AlienGoComm {
         } else if (locomotion_state_ == MOVING) {
           locomotion_state_ = M2S;
         }
-      } /* else if (cmd->X) {
+      } else if (cmd->X) {
         startControlThread();
-      } */
+      }
     }
 
     float lin_x = -cmd->left_y, lin_y = -cmd->left_x, rot_z = -cmd->right_x;
     high_state_mutex_.lock();
     if (lin_x != 0. or lin_y != 0.) {
-      float norm = std::hypot(lin_x, lin_y);
-      cmd_vel_[0] = lin_x / norm;
-      cmd_vel_[1] = lin_y / norm;
+//      float norm = std::hypot(lin_x, lin_y);
+//      cmd_vel_[0] = lin_x / norm;
+//      cmd_vel_[1] = lin_y / norm;
     } else {
       cmd_vel_[0] = cmd_vel_[1] = 0.;
     }
-    if (rot_z > 0.2) cmd_vel_[2] = 1.;
-    else if (rot_z < -0.2) cmd_vel_[2] = -1.;
-    else cmd_vel_[2] = 0.;
+//    if (rot_z > 0.2) cmd_vel_[2] = 1.;
+//    else if (rot_z < -0.2) cmd_vel_[2] = -1.;
+//    else cmd_vel_[2] = 0.;
+    cmd_vel_[2] = rot_z;
     high_state_mutex_.unlock();
   }
 
@@ -444,15 +457,15 @@ class AlienGoBase : public AlienGoComm {
 };
 
 template<int N>
-static alienGo_deploy::FloatArray::Ptr makeFloatArray(const fArray<N> &data) {
-  alienGo_deploy::FloatArray::Ptr array(new alienGo_deploy::FloatArray);
+static aliengo_deploy::FloatArray::Ptr makeFloatArray(const fArray<N> &data) {
+  aliengo_deploy::FloatArray::Ptr array(new aliengo_deploy::FloatArray);
   for (int i = 0; i < N; ++i) array->data.push_back(data[i]);
   return array;
 }
 
 template<std::size_t N>
-static alienGo_deploy::FloatArray::Ptr makeFloatArray(const std::array<float, N> &data) {
-  alienGo_deploy::FloatArray::Ptr array(new alienGo_deploy::FloatArray);
+static aliengo_deploy::FloatArray::Ptr makeFloatArray(const std::array<float, N> &data) {
+  aliengo_deploy::FloatArray::Ptr array(new aliengo_deploy::FloatArray);
   for (int i = 0; i < N; ++i) array->data.push_back(data[i]);
   return array;
 }
@@ -462,16 +475,37 @@ class AlienGo : public AlienGoBase {
   explicit AlienGo(const std::string &model_path, int inner_freq = 500, int outer_freq = 50)
       : AlienGoBase(inner_freq, outer_freq),
         policy_(model_path, torch::cuda::is_available() ? torch::kCUDA : torch::kCPU),
-        tg_(std::make_shared<VerticalTG>(0.12), 2.0, {0, -PI, -PI, 0}) {}
+        tg_(std::make_shared<VerticalTG>(0.12), 2.0, {-PI, 0., 0., -PI}) {}
 
  private:
   void controlLoopEvent() override {
     AlienGoComm::controlLoopEvent();
     auto data = collectProprioInfo();
-    alienGo_deploy::MultiFloatArray multi_array;
+//    if (not residue_history_.is_empty()) {
+//      aliengo_deploy::MultiFloatArray multi_array;
+//      low_history_mutex_.lock();
+//      multi_array.data.push_back(*makeFloatArray(residue_history_.get_padded(-2)));
+//      multi_array.data.push_back(*makeFloatArray(residue_history_.get_padded(-7)));
+//      multi_array.data.push_back(*makeFloatArray(residue_history_.get_padded(-12)));
+//      low_history_mutex_.unlock();
+//      obs_history_mutex_.lock();
+//      multi_array.data.push_back(*makeFloatArray(obs_history_.get_padded(-2)->joint_vel));
+//      multi_array.data.push_back(*makeFloatArray(obs_history_.get_padded(-7)->joint_vel));
+//      multi_array.data.push_back(*makeFloatArray(obs_history_.get_padded(-12)->joint_vel));
+//      obs_history_mutex_.unlock();
+//      low_msg_mutex_.lock();
+//      aliengo_deploy::FloatArray torque_array;
+//      for (int i = 0; i < 12; ++i) {
+//        torque_array.data.push_back(low_state_msg_.motorState[i].tauEst);
+//      }
+//      multi_array.data.push_back(torque_array);
+//      low_msg_mutex_.unlock();
+//      data_tester_.publish(multi_array);
+//    }
 
-//    alienGo_deploy::FloatArray array;
-//    multi_array.data.push_back(*makeFloatArray(low_state_msg_.imu.rpy));
+//    aliengo_deploy::MultiFloatArray multi_array;
+//    aliengo_deploy::FloatArray array;
+//    multi_array.data.push_back(*makeFloatArray(data->roll_pitch));
 //    multi_array.data.push_back(*makeFloatArray(low_state_msg_.imu.gyroscope));
 //    multi_array.data.push_back(*makeFloatArray(low_state_msg_.imu.accelerometer));
 //    multi_array.data.push_back(array);
@@ -489,7 +523,7 @@ class AlienGo : public AlienGoBase {
 //    multi_array.data.push_back(*makeFloatArray(data->joint_pos_target));
 
 //    multi_array.data.push_back(*makeFloatArray());
-    data_tester_.publish(multi_array);
+//    data_tester_.publish(multi_array);
   }
 
   void policyReset() override {
@@ -521,13 +555,15 @@ class AlienGo : public AlienGoBase {
   std::shared_ptr<ProprioInfo> collectProprioInfo() {
     auto obs = std::make_shared<ProprioInfo>();
     high_state_mutex_.lock();
-    obs->command = cmd_vel_;
+    obs->command[0] = cmd_vel_[0] != 0. or cmd_vel_[1] != 0.;
+    obs->command.segment<3>(1) = cmd_vel_;
     high_state_mutex_.unlock();
     getLinearVelocity(obs->base_linear);
 
     low_msg_mutex_.lock();
-    getGravityVector(low_state_msg_.imu.quaternion, obs->gravity_vector);
+    copy<2>(low_state_msg_.imu.rpy, obs->roll_pitch);
     copy<3>(low_state_msg_.imu.gyroscope, obs->base_angular);
+//    getBaseTwist(obs->base_linear, obs->base_angular);
     for (int i = 0; i < 12; ++i) {
       obs->joint_pos[i] = low_state_msg_.motorState[i].q;
       obs->joint_vel[i] = low_state_msg_.motorState[i].dq;
@@ -552,16 +588,14 @@ class AlienGo : public AlienGoBase {
     assert(not obs_history_.is_empty());
     auto proprio_obs = obs_history_[-1];
     reinterpret_cast<ProprioInfo &>(*obs) = *proprio_obs;
-    low_state_mutex_.lock();
-    obs->joint_prev_pos_err = proc_action_ - proprio_obs->joint_pos;
-    low_state_mutex_.unlock();
-//    obs_history_mutex_.unlock();
-
     low_history_mutex_.lock();
+    obs->joint_prev_pos_err = low_cmd_history_.get_padded(-2) - proprio_obs->joint_pos;
+
     // in simulation, apply command -> step simulation -> get observation
     // in real world, apply command -> low loop period -> get observation
     auto low_cmd_p0_01 = low_cmd_history_.get_padded(p0_01 - 1),
         low_cmd_p0_02 = low_cmd_history_.get_padded(p0_02 - 1);
+    print(low_cmd_p0_01.transpose(), low_cmd_p0_02.transpose());
 //    obs_history_mutex_.lock();
     const auto obs_p0_01 = obs_history_.get_padded(p0_01),
         obs_p0_02 = obs_history_.get_padded(p0_02);
@@ -590,6 +624,22 @@ class AlienGo : public AlienGoBase {
     out[1] = base_twist.vel.y();
     out[2] = base_twist.vel.z();
   }
+  void getBaseTwist(fArrayRef<3> lin, fArrayRef<3> rot) {
+    cam_state_mutex_.lock();
+    KDL::Twist cam_twist({cam_lin_vel_.x(), cam_lin_vel_.y(), cam_lin_vel_.z()},
+                         {cam_ang_vel_.x(), cam_ang_vel_.y(), cam_ang_vel_.z()});
+    cam_state_mutex_.unlock();
+    KDL::Frame cam2base({0.9703, 0., 0.2419, 0., 1., 0., -0.2419, 0., 0.9703},
+                        {0.3312, 0.0173, -0.0045});
+
+    auto base_twist = cam2base * cam_twist;
+    lin[0] = base_twist.vel.x();
+    lin[1] = base_twist.vel.y();
+    lin[2] = base_twist.vel.z();
+    rot[0] = base_twist.rot.x();
+    rot[1] = base_twist.rot.y();
+    rot[2] = base_twist.rot.z();
+  }
 
   void getLinearVelocity2(fArrayRef<3> out) {
     // get base linear velocity in BASE frame
@@ -600,7 +650,7 @@ class AlienGo : public AlienGoBase {
     // c_V_c, i.e. cam_lin_vel_; c_Ω_c, i.e. cam_ang_vel_
 
     Eigen::Matrix3f b_R_c;
-    b_R_c << 0.9703, 0., 0.2419, 0., 1., 0., -0.2419, 0., 0.9703;
+    b_R_c << 0.9703, 0., 0.2419, 0., 1., 0., -0.2419, 0., 0.9703; // AngleAxis(14°, UnitY)
     const Vector3 b_P_cb(-0.3312, -0.0173, 0.0045);
     cam_state_mutex_.lock();
     out = b_R_c * cam_lin_vel_ + (b_R_c * cam_ang_vel_).cross(b_P_cb);
@@ -614,6 +664,26 @@ class AlienGo : public AlienGoBase {
     out[2] = 1 - 2 * x * x - 2 * y * y;
   }
 
+  void getGravityVector(const std::array<float, 3> &rpy, fArrayRef<3> out) {
+    float r = rpy[0], p = rpy[1], y = rpy[2];
+    Eigen::AngleAxisf r_rot(r + 2 * PI / 180, Vector3::UnitX()), p_rot(p, Vector3::UnitY()), y_rot(y, Vector3::UnitZ());
+//    print((y_rot * p_rot * r_rot).toRotationMatrix());
+    out = (y_rot * p_rot * r_rot).toRotationMatrix().col(2);
+  }
+
+  void testRpy(const std::array<float, 3> &rpy, const std::array<float, 4> &orn) {
+    float r = rpy[0], p = rpy[1], y = rpy[2];
+    Eigen::AngleAxisf r_rot(r, Vector3::UnitX()), p_rot(p, Vector3::UnitY()), y_rot(y, Vector3::UnitZ());
+    print((y_rot * p_rot * r_rot).toRotationMatrix().col(2));
+    Eigen::Quaternionf quat(orn[0], orn[1], orn[2], orn[3]);
+    print(quat.toRotationMatrix());
+    Array3 out;
+    getGravityVector(orn, out);
+    print(out.transpose(), '\n');
+
+//    Eigen::AngleAxisf r_rot(r, Vector3::UnitX()), p_rot(p, Vector3::UnitY()), y_rot(y, Vector3::UnitZ());
+//    out = (r_rot * p_rot).toRotationMatrix().col(2);
+  }
   // action relevant
   TgStateMachine tg_;
   Policy policy_;

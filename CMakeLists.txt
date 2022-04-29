@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.10)
 
-project(alienGo_deploy)
+project(aliengo_deploy)
 
 set(LIBTORCH_PATH $ENV{HOME}/libraries/libtorch)
 set(CMAKE_PREFIX_PATH ${CMAKE_PREFIX_PATH} ${LIBTORCH_PATH}/share/cmake)
@@ -34,7 +34,7 @@ include_directories(${catkin_INCLUDE_DIRS})
 include_directories(thirdparty/unitree_legged_sdk/include)
 include_directories(${EIGEN3_INCLUDE_DIRS})
 
-add_executable(alienGo_policy src/main.cpp)
-target_link_libraries(alienGo_policy ${catkin_LIBRARIES} ${TORCH_LIBRARIES} ${EXTRA_LIBS} lcm)
+add_executable(aliengo_policy src/main.cpp)
+target_link_libraries(aliengo_policy ${catkin_LIBRARIES} ${TORCH_LIBRARIES} ${EXTRA_LIBS} lcm)
 
-set_property(TARGET alienGo_policy PROPERTY CXX_STANDARD 14)
+set_property(TARGET aliengo_policy PROPERTY CXX_STANDARD 14)

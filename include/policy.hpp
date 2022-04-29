@@ -19,6 +19,7 @@ class SlidingWindow {
       num_transitions_ = history_len_ - 1;
       obs_buffer_.index_put_({"...", Slice(None, num_transitions_)},
                              obs_buffer_.index({"...", Slice(-num_transitions_)}));
+//      print("flush");
     }
     obs_buffer_.index_put_({"...", num_transitions_}, proprio_obs.to(device_));
     num_transitions_ += 1;
@@ -64,8 +65,8 @@ class Policy {
   Policy(const Policy &) = delete;
 
   torch::Tensor biases = torch::zeros(12);
-  torch::Tensor weights = torch::from_blob(new float[12]{0.25, 0.25, 0.15, 0.25, 0.25, 0.15,
-                                                         0.25, 0.25, 0.15, 0.25, 0.25, 0.15}, 12);
+  torch::Tensor weights = torch::from_blob(new float[12]{0.2, 0.2, 0.1, 0.2, 0.2, 0.1,
+                                                         0.2, 0.2, 0.1, 0.2, 0.2, 0.1}, 12);
 
   void clearHistory() { history_.clear(); }
 

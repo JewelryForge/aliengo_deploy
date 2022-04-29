@@ -2,7 +2,7 @@
 #include "io.hpp"
 
 int main(int argc, char *argv[]) {
-  ros::init(argc, argv, "alienGo_policy");
+  ros::init(argc, argv, "aliengo_policy");
   std::string model_path;
   ros::param::get("model_path", model_path);
   print("Loading Model", model_path);

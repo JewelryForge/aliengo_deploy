@@ -6,8 +6,8 @@
 struct ProprioObservation {
   static constexpr uint dim = 36;
   using array_type = fArray<dim>;
-  Array3 command;
-  Array3 gravity_vector;
+  Array4 command;
+  Array2 roll_pitch;
   Array3 base_linear;
   Array3 base_angular;
   Array12 joint_pos;
@@ -15,8 +15,8 @@ struct ProprioObservation {
 
   std::shared_ptr<array_type> standard() const {
     auto array = std::make_shared<array_type>();
-    array->segment<3>(0) = command;
-    array->segment<3>(3) = gravity_vector;
+    array->segment<4>(0) = command;
+    array->segment<2>(4) = roll_pitch;
     array->segment<3>(6) = base_linear;
     array->segment<3>(9) = base_angular;
     array->segment<12>(12) = joint_pos;
@@ -39,8 +39,8 @@ struct ProprioInfo : public ProprioObservation {
 
   std::shared_ptr<array_type> standard() const {
     auto array = std::make_shared<array_type>();
-    array->segment<3>(0) = command;
-    array->segment<3>(3) = gravity_vector;
+    array->segment<4>(0) = command;
+    array->segment<2>(4) = roll_pitch;
     array->segment<3>(6) = base_linear;
     array->segment<3>(9) = base_angular;
     array->segment<12>(12) = joint_pos;
@@ -66,8 +66,8 @@ struct RealWorldObservation : public ProprioInfo {
 
   std::shared_ptr<array_type> standard() const {
     auto array = std::make_shared<array_type>();
-    array->segment<3>(0) = command;
-    array->segment<3>(3) = gravity_vector;
+    array->segment<4>(0) = command;
+    array->segment<2>(4) = roll_pitch;
     array->segment<3>(6) = base_linear;
     array->segment<3>(9) = base_angular;
     array->segment<12>(12) = joint_pos;
@@ -88,7 +88,7 @@ struct RealWorldObservation : public ProprioInfo {
 
 const fArray<RealWorldObservation::dim> RealWorldObservation::weights {
     std::array<float, RealWorldObservation::dim>{
-        1., 1., 1., 5., 5., 20.,
+        1., 1., 1., 1., 2., 2.,
         2., 2., 2., 2., 2., 2.,
         2., 2., 2., 2., 2., 2., 2., 2., 2., 2., 2., 2.,
         0.5, 0.4, 0.3, 0.5, 0.4, 0.3, 0.5, 0.4, 0.3, 0.5, 0.4, 0.3,
@@ -104,7 +104,7 @@ const fArray<RealWorldObservation::dim> RealWorldObservation::weights {
     }.data()};
 const fArray<RealWorldObservation::dim> RealWorldObservation::biases {
     std::array<float, RealWorldObservation::dim>{
-        0., 0., 0., 0., 0., 0.99,
+        0., 0., 0., 0., 0., 0.,
         0., 0., 0., 0., 0., 0.,
         0., 0.6435, -1.287, 0., 0.6435, -1.287, 0., 0.6435, -1.287, 0., 0.6435, -1.287,
         0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.,

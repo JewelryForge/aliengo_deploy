@@ -7,6 +7,7 @@
 template<std::size_t N>
 using fArray = Eigen::Array<float, N, 1>;
 
+using Array2 = fArray<2>;
 using Array3 = fArray<3>;
 using Array4 = fArray<4>;
 using Array8 = fArray<8>;
