@@ -3,6 +3,17 @@
 
 #include "math_utils.hpp"
 
+//template<std::size_t dim = 36>
+//struct ObservationBase {
+//  fArray<dim> array;
+//  fArrayRef<4> command = array.template segment<4>(0);
+//  fArrayRef<2> roll_pitch = array.template segment<2>(4);
+//  fArrayRef<3> base_linear = array.template segment<3>(6);
+//  fArrayRef<3> base_angular = array.template segment<3>(9);
+//  fArrayRef<12> joint_pos = array.template segment<12>(12);
+//  fArrayRef<12> joint_vel = array.template segment<12>(24);
+//};
+
 struct ProprioObservation {
   static constexpr uint dim = 36;
   using array_type = fArray<dim>;
@@ -86,7 +97,7 @@ struct RealWorldObservation : public ProprioInfo {
   }
 };
 
-const fArray<RealWorldObservation::dim> RealWorldObservation::weights {
+const fArray<RealWorldObservation::dim> RealWorldObservation::weights{
     std::array<float, RealWorldObservation::dim>{
         1., 1., 1., 1., 2., 2.,
         2., 2., 2., 2., 2., 2.,
@@ -102,7 +113,7 @@ const fArray<RealWorldObservation::dim> RealWorldObservation::weights {
         2., 2., 2., 2., 2., 2., 2., 2., 2., 2., 2., 2.,
         1.
     }.data()};
-const fArray<RealWorldObservation::dim> RealWorldObservation::biases {
+const fArray<RealWorldObservation::dim> RealWorldObservation::biases{
     std::array<float, RealWorldObservation::dim>{
         0., 0., 0., 0., 0., 0.,
         0., 0., 0., 0., 0., 0.,

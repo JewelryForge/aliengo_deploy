@@ -1,6 +1,6 @@
 <launch>
     <arg name="gamepad_type" default="xbox"/>
-    <arg name="model_path" default="$(find aliengo_deploy)/script_model0.10.pt"/>
+    <arg name="model_path" default="$(find aliengo_deploy)/script_model0.11m.pt"/>
     <param name="gamepad_type" value="$(arg gamepad_type)"/>
     <param name="model_path" value="$(arg model_path)"/>
 

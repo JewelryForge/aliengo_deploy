@@ -327,23 +327,28 @@ class AlienGoBase : public AlienGoComm {
         } else if (locomotion_state_ == MOVING) {
           locomotion_state_ = M2S;
         }
-      } else if (cmd->X) {
-        startControlThread();
+      } else if (cmd->X) { // restore
+        if (not active_) {
+          locomotion_state_ = LYING;
+        }
       }
     }
 
     float lin_x = -cmd->left_y, lin_y = -cmd->left_x, rot_z = -cmd->right_x;
     high_state_mutex_.lock();
-    if (lin_x != 0. or lin_y != 0.) {
+//    if (lin_x != 0. or lin_y != 0.) {
 //      float norm = std::hypot(lin_x, lin_y);
 //      cmd_vel_[0] = lin_x / norm;
 //      cmd_vel_[1] = lin_y / norm;
-    } else {
-      cmd_vel_[0] = cmd_vel_[1] = 0.;
-    }
+//    } else {
+//      cmd_vel_[0] = cmd_vel_[1] = 0.;
+//    }
+
 //    if (rot_z > 0.2) cmd_vel_[2] = 1.;
 //    else if (rot_z < -0.2) cmd_vel_[2] = -1.;
 //    else cmd_vel_[2] = 0.;
+    cmd_vel_[0] = lin_x;
+    cmd_vel_[1] = lin_y;
     cmd_vel_[2] = rot_z;
     high_state_mutex_.unlock();
   }
@@ -595,7 +600,7 @@ class AlienGo : public AlienGoBase {
     // in real world, apply command -> low loop period -> get observation
     auto low_cmd_p0_01 = low_cmd_history_.get_padded(p0_01 - 1),
         low_cmd_p0_02 = low_cmd_history_.get_padded(p0_02 - 1);
-    print(low_cmd_p0_01.transpose(), low_cmd_p0_02.transpose());
+//    print(low_cmd_p0_01.transpose(), low_cmd_p0_02.transpose());
 //    obs_history_mutex_.lock();
     const auto obs_p0_01 = obs_history_.get_padded(p0_01),
         obs_p0_02 = obs_history_.get_padded(p0_02);

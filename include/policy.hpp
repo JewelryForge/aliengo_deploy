@@ -68,6 +68,7 @@ class Policy {
   torch::Tensor weights = torch::from_blob(new float[12]{0.2, 0.2, 0.1, 0.2, 0.2, 0.1,
                                                          0.2, 0.2, 0.1, 0.2, 0.2, 0.1}, 12);
 
+
   void clearHistory() { history_.clear(); }
 
   torch::Tensor get_action(const ProprioInfo &proprio_info, const RealWorldObservation &real_world_obs) {

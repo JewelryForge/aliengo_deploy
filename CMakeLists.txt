@@ -5,7 +5,6 @@ project(aliengo_deploy)
 set(LIBTORCH_PATH $ENV{HOME}/libraries/libtorch)
 set(CMAKE_PREFIX_PATH ${CMAKE_PREFIX_PATH} ${LIBTORCH_PATH}/share/cmake)
 set(CMAKE_CXX_STANDARD 14)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
 
 if((CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "x86_64"))
     set(SYS_ARCH "amd64")
@@ -20,8 +19,12 @@ endif()
 
 set(EXTRA_LIBS ${PROJECT_SOURCE_DIR}/thirdparty/unitree_legged_sdk/lib/libunitree_legged_sdk_${SYS_ARCH}.so)
 
-find_package(Eigen3 REQUIRED)
 find_package(Torch REQUIRED)
+
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
+message(STATUS "TORCH_CXX_FLAGS: ${TORCH_CXX_FLAGS}")
+
+find_package(Eigen3 REQUIRED)
 find_package(catkin REQUIRED COMPONENTS
         roscpp std_msgs nav_msgs tf message_generation)
 
